@@ -1,5 +1,8 @@
-// src/app/api/chatbot/route.ts
 import { NextResponse } from 'next/server';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+
+// Initialize Gemini
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY || "AIzaSyDr6KjoDsPwQiAdDN-8CdzTTbIk8rIIZRg");
 
 interface Question {
     id: string;
@@ -32,8 +35,7 @@ interface UserSession {
     userName?: string;
 }
 
-// Keep your existing insurancePlans array
-const insurancePlans: InsurancePlan[] =  [
+const insurancePlans: InsurancePlan[] = [
     {
         PlanID: 1,
         PlanName: "AmeriHealth Platinum",
@@ -116,7 +118,6 @@ const insurancePlans: InsurancePlan[] =  [
     }
 ];
 
-// Keep your existing insuranceQuestions array
 const insuranceQuestions: Question[] = [
     {
         id: 'name',
@@ -202,91 +203,72 @@ const insuranceQuestions: Question[] = [
 // Store user responses
 const userResponses = new Map<string, UserSession>();
 
-export async function POST(req: Request) {
-    try {
-        console.log('API route hit');
-
-        const { message, userId } = await req.json();
-        console.log('Received:', { message, userId });
-
-        if (!userResponses.has(userId)) {
-            userResponses.set(userId, {
-                responses: new Map(),
-                currentQuestionIndex: 0,
-                phase: 'questioning'
-            });
+async function generatePersonalizedSummary(
+    selectedPlan: InsurancePlan,
+    userResponses: Map<string, any>,
+    userName: string
+): Promise<string> {
+    const context = {
+        userName,
+        familySize: userResponses.get('family_size'),
+        primaryNeeds: userResponses.get('healthcare_needs'),
+        diagnosticTests: userResponses.get('diagnostic_tests'),
+        prescriptionDrugs: userResponses.get('prescription_drugs'),
+        emergencyRoom: userResponses.get('emergency_room'),
+        maternityPlanning: userResponses.get('maternity_planning'),
+        additionalServices: userResponses.get('additional_services'),
+        preferredHospital: userResponses.get('preferred_hospital'),
+        plan: {
+            name: selectedPlan.PlanName,
+            deductibles: {
+                individual: selectedPlan.DeductibleIndividual,
+                family: selectedPlan.DeductibleFamily
+            },
+            copays: {
+                physician: selectedPlan.VisitToPhysicianCopay,
+                diagnosticTest: selectedPlan.DiagnosticTestCopay,
+                imaging: selectedPlan.ImagingCopay,
+                genericDrugs: selectedPlan.GenericDrugsCopay,
+                emergencyRoom: selectedPlan.EmergencyRoomCare
+            },
+            maternity: selectedPlan.MaternityCoinsurance,
+            vaccination: selectedPlan.VaccinationCopay
         }
+    };
 
-        const userSession = userResponses.get(userId)!;
+    const prompt = `
+    As an insurance expert, create a personalized summary explaining why ${context.plan.name} is suitable for ${context.userName}. 
+    
+    User Profile:
+    - Family Coverage: ${context.familySize}
+    - Primary Healthcare Needs: ${context.primaryNeeds}
+    - Requires Diagnostic Tests: ${context.diagnosticTests}
+    - Regular Prescription Needs: ${context.prescriptionDrugs}
+    - Emergency Room Usage: ${context.emergencyRoom}
+    - Maternity Planning: ${context.maternityPlanning}
+    - Additional Services Requested: ${context.additionalServices}
+    - Preferred Hospital Network: ${context.preferredHospital}
 
-        // If in plan selection phase
-        if (userSession.phase === 'selecting_plan') {
-            const selectedPlanIndex = parseInt(message) - 1;
-            const recommendations = generateRecommendations(userSession.responses);
+    Plan Details:
+    - Deductibles: Individual $${context.plan.deductibles.individual}, Family $${context.plan.deductibles.family}
+    - Copays: Physician $${context.plan.copays.physician}, Diagnostic $${context.plan.copays.diagnosticTest}
+    - Emergency Room: $${context.plan.copays.emergencyRoom}
+    - Maternity Coinsurance: ${context.plan.maternity}%
+    - Vaccination Coverage: ${context.plan.vaccination === 0 ? 'Full Coverage' : context.plan.vaccination === null ? 'Not Covered' : `$${context.plan.vaccination} Copay`}
 
-            if (selectedPlanIndex >= 0 && selectedPlanIndex < recommendations.length) {
-                const selectedPlan = recommendations[selectedPlanIndex];
-                const summary = generatePlanSummary(selectedPlan, userSession);
+    Please provide a 3-4 paragraph summary explaining:
+    1. Why this plan matches their specific needs and circumstances
+    2. The key benefits that align with their healthcare requirements
+    3. Any specific advantages based on their family size and usage patterns
+    4. Potential cost savings based on their expected healthcare needs
 
-                // Clear session after selection
-                userResponses.delete(userId);
+    Make it personal, clear, and focused on value proposition. Avoid technical jargon.
+    `;
 
-                return NextResponse.json({
-                    type: 'plan_selected',
-                    message: "Here's your selected plan summary:",
-                    planSummary: summary
-                });
-            } else {
-                return NextResponse.json({
-                    type: 'error',
-                    message: "Please select a valid plan number (1, 2, or 3).",
-                    recommendations
-                });
-            }
-        }
-
-        // Regular questioning phase
-        if (userSession.currentQuestionIndex > 0) {
-            const previousQuestion = insuranceQuestions[userSession.currentQuestionIndex - 1];
-            userSession.responses.set(previousQuestion.id, message);
-
-            if (previousQuestion.id === 'name') {
-                userSession.userName = message;
-            }
-        }
-
-        userSession.currentQuestionIndex++;
-
-        // Check if we've reached the end of questions
-        if (userSession.currentQuestionIndex >= insuranceQuestions.length) {
-            const recommendations = generateRecommendations(userSession.responses);
-            userSession.phase = 'selecting_plan';
-
-            return NextResponse.json({
-                type: 'recommendations',
-                message: "Based on your responses, here are your recommended insurance plans. Please select a plan by entering its number (1, 2, or 3):",
-                recommendations
-            });
-        }
-
-        // Get next question
-        const nextQuestion = insuranceQuestions[userSession.currentQuestionIndex];
-        return NextResponse.json({
-            type: 'question',
-            message: nextQuestion.question,
-            options: nextQuestion.options || [],
-            questionType: nextQuestion.type
-        });
-
-    } catch (error) {
-        console.error('API Error:', error);
-        return NextResponse.json(
-            { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
-            { status: 500 }
-        );
-    }
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const result = await model.generateContent(prompt);
+    return result.response.text();
 }
-
 function generateRecommendations(responses: Map<string, any>) {
     const planScores = insurancePlans.map(plan => {
         let score = 0;
@@ -345,7 +327,6 @@ function generateRecommendations(responses: Map<string, any>) {
         return { plan, score };
     });
 
-    // Sort plans by score and return top 3
     return planScores
         .sort((a, b) => b.score - a.score)
         .slice(0, 3)
@@ -368,14 +349,100 @@ function generateRecommendations(responses: Map<string, any>) {
         }));
 }
 
-function generatePlanSummary(selectedPlan: any, userSession: UserSession) {
+async function generatePlanSummary(selectedPlan: any, userSession: UserSession) {
+    const personalizedSummary = await generatePersonalizedSummary(
+        selectedPlan.planDetails,
+        userSession.responses,
+        userSession.userName || "User"
+    );
+
     return {
+        personalizedSummary,
         timestamp: new Date().toISOString(),
-        userLogin: "Vishnusan58",
-        userName: userSession.userName,
-        selectedPlan: selectedPlan.planDetails,
-        planFeatures: selectedPlan.features,
-        matchScore: selectedPlan.matchScore,
-        userResponses: Object.fromEntries(userSession.responses)
+        userName: userSession.userName
     };
+}
+
+export async function POST(req: Request) {
+    try {
+        console.log('API route hit');
+        const { message, userId } = await req.json();
+        console.log('Received:', { message, userId });
+
+        if (!userResponses.has(userId)) {
+            userResponses.set(userId, {
+                responses: new Map(),
+                currentQuestionIndex: 0,
+                phase: 'questioning'
+            });
+        }
+
+        const userSession = userResponses.get(userId)!;
+
+        // Plan selection phase
+        if (userSession.phase === 'selecting_plan') {
+            const selectedPlanIndex = parseInt(message) - 1;
+            const recommendations = generateRecommendations(userSession.responses);
+
+            if (selectedPlanIndex >= 0 && selectedPlanIndex < recommendations.length) {
+                const selectedPlan = recommendations[selectedPlanIndex];
+                const summary = await generatePlanSummary(selectedPlan, userSession);
+
+                // Clear session after selection
+                userResponses.delete(userId);
+
+                return NextResponse.json({
+                    type: 'plan_selected',
+                    message: "Here's your personalized insurance plan summary:",
+                    summary: summary.personalizedSummary  // Only return the personalized summary
+                });
+            } else {
+                return NextResponse.json({
+                    type: 'error',
+                    message: "Please select a valid plan number (1, 2, or 3).",
+                    recommendations
+                });
+            }
+        }
+
+        // Questioning phase
+        if (userSession.currentQuestionIndex > 0) {
+            const previousQuestion = insuranceQuestions[userSession.currentQuestionIndex - 1];
+            userSession.responses.set(previousQuestion.id, message);
+
+            if (previousQuestion.id === 'name') {
+                userSession.userName = message;
+            }
+        }
+
+        userSession.currentQuestionIndex++;
+
+        // Check if all questions are answered
+        if (userSession.currentQuestionIndex >= insuranceQuestions.length) {
+            const recommendations = generateRecommendations(userSession.responses);
+            userSession.phase = 'selecting_plan';
+
+            return NextResponse.json({
+                type: 'recommendations',
+                message: "Based on your responses, here are your recommended insurance plans. Please select a plan by entering its number (1, 2, or 3):",
+                recommendations
+            });
+        }
+
+        // Get next question
+        const nextQuestion = insuranceQuestions[userSession.currentQuestionIndex];
+        return NextResponse.json({
+            type: 'question',
+            message: nextQuestion.question,
+            options: nextQuestion.options || [],
+            questionType: nextQuestion.type
+        });
+
+    } catch (error) {
+        console.error('API Error:', error);
+        return NextResponse.json(
+            { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
+            { status: 500 }
+        );
+    }
 }

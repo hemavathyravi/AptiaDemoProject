@@ -1,10 +1,10 @@
 // src/app/page.tsx
-import Chatbot from '@/components/Chatbot';
+import ChatInterface from '@/components/ChatInterface';
 
 export default function Home() {
     return (
-        <main className="min-h-screen bg-gray-100 p-4">
-            <Chatbot />
+        <main>
+            <ChatInterface />
         </main>
     );
 }
