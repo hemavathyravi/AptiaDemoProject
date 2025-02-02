@@ -1,9 +1,11 @@
+//src/app/api/chatbot/route.ts
 import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 // Initialize Gemini
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY || "AIzaSyDr6KjoDsPwQiAdDN-8CdzTTbIk8rIIZRg");
 
+// Define the structure for insurance questions
 interface Question {
     id: string;
     question: string;
@@ -11,9 +13,11 @@ interface Question {
     type: 'text' | 'options' | 'boolean';
 }
 
+// Define the structure for insurance plans
 interface InsurancePlan {
     PlanID: number;
     PlanName: string;
+    PdfLink: string;
     OutOfNetworkCoverage: string;
     DeductibleIndividual: number;
     DeductibleFamily: number;
@@ -28,17 +32,39 @@ interface InsurancePlan {
     VaccinationCopay: number | null;
 }
 
+// Define the structure for user session
 interface UserSession {
     responses: Map<string, any>;
     currentQuestionIndex: number;
     phase: 'questioning' | 'selecting_plan';
     userName?: string;
+    keepCurrentPlan?: boolean; // New field to track if user wants to keep current plan
 }
+// Current/Default Insurance Plan
+const currentPlan: InsurancePlan = {
+    PlanID: 4,
+    PlanName: "Horizon Blue",
+    PdfLink: "https://drive.google.com/file/d/1fGl7f1M1YtsmbkYJTzeE9DNHkNGR4Ktq/view?usp=sharing",
+    OutOfNetworkCoverage: "Not covered",
+    DeductibleIndividual: 1500,
+    DeductibleFamily: 3000,
+    MaternityCoinsurance: 0,
+    VisitToPhysicianCopay: 20,
+    DiagnosticTestCopay: 0,
+    ImagingCopay: 0,
+    GenericDrugsCopay: 10,
+    OutpatientSurgeryCopay: 150,
+    EmergencyRoomCare: 100,
+    DurableMedicalEquipmentCoinsurance: 50,
+    VaccinationCopay: 10
+};
+
 
 const insurancePlans: InsurancePlan[] = [
     {
         PlanID: 1,
         PlanName: "AmeriHealth Platinum",
+        PdfLink: "https://drive.google.com/file/d/15abfYJxr25RcHdQTDK4qU5iKKG-3Dfrr/view?usp=sharing",
         OutOfNetworkCoverage: "Not covered",
         DeductibleIndividual: 0,
         DeductibleFamily: 0,
@@ -55,6 +81,7 @@ const insurancePlans: InsurancePlan[] = [
     {
         PlanID: 2,
         PlanName: "AmeriHealth Gold",
+        PdfLink: "https://drive.google.com/file/d/1SkVyCJHk7UBgJweV1gV4gaHSSEuFEskD/view?usp=sharing",
         OutOfNetworkCoverage: "Not covered",
         DeductibleIndividual: 1500,
         DeductibleFamily: 3000,
@@ -71,6 +98,7 @@ const insurancePlans: InsurancePlan[] = [
     {
         PlanID: 3,
         PlanName: "AmeriHealth Silver",
+        PdfLink: "https://drive.google.com/file/d/1FbOjIXk3q3otIxzy9Q_Ri29sLKIf03RW/view?usp=sharing",
         OutOfNetworkCoverage: "Not covered",
         DeductibleIndividual: 2500,
         DeductibleFamily: 5000,
@@ -87,6 +115,7 @@ const insurancePlans: InsurancePlan[] = [
     {
         PlanID: 4,
         PlanName: "Horizon Blue",
+        PdfLink: "https://drive.google.com/file/d/1fGl7f1M1YtsmbkYJTzeE9DNHkNGR4Ktq/view?usp=sharing",
         OutOfNetworkCoverage: "Not covered",
         DeductibleIndividual: 1500,
         DeductibleFamily: 3000,
@@ -103,6 +132,7 @@ const insurancePlans: InsurancePlan[] = [
     {
         PlanID: 5,
         PlanName: "UnitedHealthcare Oxford",
+        PdfLink: "https://drive.google.com/file/d/1cS3TMeoxnIlDW8MmUiGGJKPAEE--jIAX/view?usp=sharing",
         OutOfNetworkCoverage: "Not covered",
         DeductibleIndividual: 0,
         DeductibleFamily: 0,
@@ -123,17 +153,18 @@ const insuranceQuestions: Question[] = [
         id: 'name',
         question: "Hello! I'm your insurance assistant. What's your name?",
         type: 'text'
+        // Note: We won't add SKIP to name as it's essential
     },
     {
         id: 'coverage_amount',
         question: "What is your desired coverage amount?",
-        options: ['$250,000', '$500,000', '$750,000', '$1,000,000', '$2,000,000'],
+        options: ['$250,000', '$500,000', '$750,000', '$1,000,000', '$2,000,000', 'SKIP'],
         type: 'options'
     },
     {
         id: 'preferred_hospital',
         question: "What is your preferred hospital network?",
-        options: ['Mayo Clinic', 'Cleveland Clinic', 'Johns Hopkins', 'Local Hospital Network', 'Other'],
+        options: ['Mayo Clinic', 'Cleveland Clinic', 'Johns Hopkins', 'Local Hospital Network', 'Other', 'SKIP'],
         type: 'options'
     },
     {
@@ -145,14 +176,15 @@ const insuranceQuestions: Question[] = [
             'Self + Child',
             'Self + Spouse + 1 Child',
             'Self + Spouse + 2 Children',
-            'Self + Spouse + 3+ Children'
+            'Self + Spouse + 3+ Children',
+            'SKIP'
         ],
         type: 'options'
     },
     {
         id: 'additional_services',
         question: "Which additional services would you like included in your plan? (Select all that apply)",
-        options: ['Maternity coverage', 'Dental', 'Vision', 'Mental Health Coverage', 'Prescription Drug Coverage'],
+        options: ['Maternity coverage', 'Dental', 'Vision', 'Mental Health Coverage', 'Prescription Drug Coverage', 'SKIP'],
         type: 'options'
     },
     {
@@ -163,46 +195,45 @@ const insuranceQuestions: Question[] = [
             'Ongoing conditions',
             'Injuries',
             'Preventive care',
-            'Specialist visits'
+            'Specialist visits',
+            'SKIP'
         ],
         type: 'options'
     },
     {
         id: 'diagnostic_tests',
         question: "Do you require frequent diagnostic tests, like X-rays or blood work?",
-        options: ['Yes', 'No'],
+        options: ['Yes', 'No', 'SKIP'],
         type: 'boolean'
     },
     {
         id: 'prescription_drugs',
         question: "Do you regularly take prescription drugs?",
-        options: ['Yes', 'No'],
+        options: ['Yes', 'No', 'SKIP'],
         type: 'boolean'
     },
     {
         id: 'emergency_room',
         question: "How often do you visit the emergency room?",
-        options: ['Rarely', 'Occasionally', 'Frequently'],
+        options: ['Rarely', 'Occasionally', 'Frequently', 'SKIP'],
         type: 'options'
     },
     {
         id: 'maternity_planning',
         question: "Are you planning for pregnancy or maternity-related services in the near future?",
-        options: ['Yes', 'No'],
+        options: ['Yes', 'No', 'SKIP'],
         type: 'boolean'
     },
     {
         id: 'wellness_benefits',
         question: "Would you like to include additional wellness benefits?",
-        options: ['Yes', 'No'],
+        options: ['Yes', 'No', 'SKIP'],
         type: 'boolean'
     }
 ];
 
 
 // Store user responses
-const userResponses = new Map<string, UserSession>();
-
 async function generatePersonalizedSummary(
     selectedPlan: InsurancePlan,
     userResponses: Map<string, any>,
@@ -220,6 +251,7 @@ async function generatePersonalizedSummary(
         preferredHospital: userResponses.get('preferred_hospital'),
         plan: {
             name: selectedPlan.PlanName,
+            pdfLink: selectedPlan.PdfLink,  // Added PDF link
             deductibles: {
                 individual: selectedPlan.DeductibleIndividual,
                 family: selectedPlan.DeductibleFamily
@@ -256,11 +288,16 @@ async function generatePersonalizedSummary(
     - Maternity Coinsurance: ${context.plan.maternity}%
     - Vaccination Coverage: ${context.plan.vaccination === 0 ? 'Full Coverage' : context.plan.vaccination === null ? 'Not Covered' : `$${context.plan.vaccination} Copay`}
 
-    Please provide a 3-4 paragraph summary explaining:
-    1. Why this plan matches their specific needs and circumstances
-    2. The key benefits that align with their healthcare requirements
-    3. Any specific advantages based on their family size and usage patterns
-    4. Potential cost savings based on their expected healthcare needs
+    Please provide a 2-paragraph summary:
+    1. First paragraph explaining:
+       - Why this plan matches their specific needs and circumstances
+       - The key benefits that align with their healthcare requirements
+       - Any specific advantages based on their family size and usage patterns
+       - Potential cost savings based on their expected healthcare needs
+    
+    2. Second paragraph should say:
+       "For complete details about your plan, please review the full plan documentation here: [PDF Link]"
+       Replace [PDF Link] with: ${context.plan.pdfLink}
 
     Make it personal, clear, and focused on value proposition. Avoid technical jargon.
     `;
@@ -269,24 +306,35 @@ async function generatePersonalizedSummary(
     const result = await model.generateContent(prompt);
     return result.response.text();
 }
+// Store user responses
+const userResponses = new Map<string, UserSession>();
+
+// Generate recommendations based on user responses
 function generateRecommendations(responses: Map<string, any>) {
     const planScores = insurancePlans.map(plan => {
         let score = 0;
+
+        // Get user responses
         const familySize = responses.get('family_size');
         const needsMaternity = responses.get('maternity_planning') === 'Yes' ||
             responses.get('additional_services')?.includes('Maternity coverage');
         const needsDiagnostics = responses.get('diagnostic_tests') === 'Yes';
-        const needsPrescriptions = responses.get('prescription_drugs') === 'Yes' ||
-            responses.get('additional_services')?.includes('Prescription Drug Coverage');
+        const needsPrescriptions = responses.get('prescription_drugs') === 'Yes';
         const emergencyUse = responses.get('emergency_room');
         const healthcareNeeds = responses.get('healthcare_needs') || [];
-        const preferredHospital = responses.get('preferred_hospital');
+        const preferredHospital = responses.get('preferred_hospital') || 'Local Hospital Network';
 
-        // Family size considerations
-        if (familySize !== 'Self') {
-            score += (5000 - plan.DeductibleFamily) / 1000;
-        } else {
-            score += (3000 - plan.DeductibleIndividual) / 600;
+        // Calculate scores only for non-SKIP responses
+        if (familySize && familySize !== 'SKIP') {
+            if (familySize !== 'Self') {
+                score += (5000 - plan.DeductibleFamily) / 1000;
+            } else {
+                score += (3000 - plan.DeductibleIndividual) / 600;
+            }
+        }
+
+        if (needsMaternity && needsMaternity !== 'SKIP' && plan.MaternityCoinsurance === 0) {
+            score += 20;
         }
 
         // Maternity coverage
@@ -363,74 +411,155 @@ async function generatePlanSummary(selectedPlan: any, userSession: UserSession) 
     };
 }
 
+// Main API route handler
+// In /src/app/api/chatbot/route.ts
+
 export async function POST(req: Request) {
     try {
-        console.log('API route hit');
         const { message, userId } = await req.json();
-        console.log('Received:', { message, userId });
 
+        // Initialize user session if it doesn't exist
         if (!userResponses.has(userId)) {
             userResponses.set(userId, {
                 responses: new Map(),
                 currentQuestionIndex: 0,
-                phase: 'questioning'
+                phase: "questioning",
+                keepCurrentPlan: false
             });
         }
 
         const userSession = userResponses.get(userId)!;
 
-        // Plan selection phase
+        // Handle plan selection phase
         if (userSession.phase === 'selecting_plan') {
             const selectedPlanIndex = parseInt(message) - 1;
             const recommendations = generateRecommendations(userSession.responses);
 
             if (selectedPlanIndex >= 0 && selectedPlanIndex < recommendations.length) {
                 const selectedPlan = recommendations[selectedPlanIndex];
-                const summary = await generatePlanSummary(selectedPlan, userSession);
+                const summary = await generatePersonalizedSummary(
+                    selectedPlan.planDetails,
+                    userSession.responses,
+                    userSession.userName || "User"
+                );
 
-                // Clear session after selection
+                // Clear session
                 userResponses.delete(userId);
 
                 return NextResponse.json({
                     type: 'plan_selected',
                     message: "Here's your personalized insurance plan summary:",
-                    summary: summary.personalizedSummary  // Only return the personalized summary
-                });
-            } else {
-                return NextResponse.json({
-                    type: 'error',
-                    message: "Please select a valid plan number (1, 2, or 3).",
-                    recommendations
+                    summary
                 });
             }
-        }
-
-        // Questioning phase
-        if (userSession.currentQuestionIndex > 0) {
-            const previousQuestion = insuranceQuestions[userSession.currentQuestionIndex - 1];
-            userSession.responses.set(previousQuestion.id, message);
-
-            if (previousQuestion.id === 'name') {
-                userSession.userName = message;
-            }
-        }
-
-        userSession.currentQuestionIndex++;
-
-        // Check if all questions are answered
-        if (userSession.currentQuestionIndex >= insuranceQuestions.length) {
-            const recommendations = generateRecommendations(userSession.responses);
-            userSession.phase = 'selecting_plan';
 
             return NextResponse.json({
-                type: 'recommendations',
-                message: "Based on your responses, here are your recommended insurance plans. Please select a plan by entering its number (1, 2, or 3):",
+                type: 'error',
+                message: "Please select a valid plan number (1, 2, or 3).",
+                recommendations
+            });
+        }
+
+        // Handle questioning phase
+        // Store the current question's response before moving to the next
+        if (userSession.currentQuestionIndex >= 0 &&
+            userSession.currentQuestionIndex < insuranceQuestions.length) {
+
+            const currentQuestion = insuranceQuestions[userSession.currentQuestionIndex];
+
+            // Store the user's response for the current question
+            userSession.responses.set(currentQuestion.id, message);
+
+            // Special handling for name question
+            if (currentQuestion.id === 'name') {
+                userSession.userName = message;
+            }
+
+            // Check if this response was SKIP
+            if (message === 'SKIP') {
+                userSession.keepCurrentPlan = Array.from(userSession.responses.values())
+                    .every(response => response === 'SKIP' || response === userSession.userName);
+            }
+        }
+
+        // Move to next question
+        userSession.currentQuestionIndex++;
+
+        // In the POST handler, modify the final response section:
+
+        if (userSession.currentQuestionIndex >= insuranceQuestions.length) {
+            // Get all responses for summary
+            const finalResponses = Object.fromEntries(userSession.responses);
+
+            if (userSession.keepCurrentPlan) {
+                // User skipped all questions, return current plan
+                const summary = await generatePersonalizedSummary(
+                    currentPlan,
+                    userSession.responses,
+                    userSession.userName || "User"
+                );
+
+                // Clear session
+                userResponses.delete(userId);
+
+                return NextResponse.json({
+                    type: 'plan_selected',
+                    message: "You've chosen to keep your current plan:",
+                    summary,
+                    finalPlan: {
+                        planName: "Horizon Blue",
+                        premium: "$/month",
+                        coverageDetails: [
+                            { label: "Individual Deductible", value: "$1500" },
+                            { label: "Family Deductible", value: "$3000" },
+                            { label: "Physician Visit Copay", value: "$20" },
+                            { label: "Diagnostic Test Copay", value: "$0" },
+                            { label: "Generic Drugs Copay", value: "$10" },
+                            { label: "Emergency Room Care", value: "$100" },
+                            { label: "Maternity Coverage", value: "Full Coverage" },
+                            { label: "Vaccination Coverage", value: "$10 Copay" },
+                        ]
+                    }
+                });
+            }
+
+            // Show final recommendations with updated current plan
+            const recommendations = generateRecommendations(userSession.responses);
+            userSession.phase = "selecting_plan";
+
+            return NextResponse.json({
+                type: 'final_summary',  // New type for final summary
+                message: "Here's your updated plan and recommendations:",
+                currentPlan: {
+                    planName: "Updated Horizon Blue",
+                    premium: "$/month",
+                    coverageDetails: [
+                        { label: "Individual Deductible", value: "$1500" },
+                        { label: "Family Deductible", value: "$3000" },
+                        { label: "Physician Visit Copay", value: "$20" },
+                        { label: "Diagnostic Test Copay", value: "$0" },
+                        { label: "Generic Drugs Copay", value: "$10" },
+                        { label: "Emergency Room Care", value: "$100" },
+                        { label: "Maternity Coverage", value: "Full Coverage" },
+                        { label: "Vaccination Coverage", value: "$10 Copay" },
+                        { label: "Wellness Benefits", value: finalResponses.wellness_benefits === 'Yes' ? "Included" : "Not Included" }
+                    ]
+                },
                 recommendations
             });
         }
 
         // Get next question
         const nextQuestion = insuranceQuestions[userSession.currentQuestionIndex];
+
+        // Safety check for nextQuestion
+        if (!nextQuestion) {
+            return NextResponse.json({
+                type: 'error',
+                message: "An error occurred while getting the next question.",
+            });
+        }
+
         return NextResponse.json({
             type: 'question',
             message: nextQuestion.question,

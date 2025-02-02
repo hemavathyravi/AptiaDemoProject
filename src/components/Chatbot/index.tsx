@@ -28,17 +28,11 @@ interface Message {
 }
 
 export default function Chatbot() {
-    const [messages, setMessages] = useState<Message[]>([
-        {
-            id: uuidv4(),
-            sender: 'bot',
-            text: "Hi! I'm your insurance assistant. What's your name?",
-            questionType: 'text'
-        }
-    ]);
+    const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [userId] = useState(uuidv4());
+    const [userInfo, setUserInfo] = useState<{ name: string, currentPlan: string } | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
     const scrollToBottom = () => {
@@ -48,6 +42,23 @@ export default function Chatbot() {
     useEffect(() => {
         scrollToBottom();
     }, [messages]);
+
+    useEffect(() => {
+        // Fetch user information when the component mounts
+        fetch('/api/user-info')
+            .then(response => response.json())
+            .then(data => {
+                setUserInfo(data);
+                setMessages([
+                    {
+                        id: uuidv4(),
+                        sender: 'bot',
+                        text: `Hello, ${data.name}! Your current plan is ${data.currentPlan}.`,
+                        questionType: 'text'
+                    }
+                ]);
+            });
+    }, []);
 
     const addMessage = (message: Message) => {
         setMessages(prev => [...prev, message]);
@@ -129,6 +140,23 @@ export default function Chatbot() {
         const userInput = input;
         setInput('');
         await handleChatbotResponse(userInput);
+
+        // Handle the specific case where the user requests to see their policy
+        if (userInput.toLowerCase().includes('my policy')) {
+            if (userInfo) {
+                addMessage({
+                    id: uuidv4(),
+                    sender: 'bot',
+                    text: `Here is your current policy: ${userInfo.currentPlan}`
+                });
+            } else {
+                addMessage({
+                    id: uuidv4(),
+                    sender: 'bot',
+                    text: 'Sorry, I could not retrieve your policy information.'
+                });
+            }
+        }
     };
 
     const renderRecommendation = (plan: any, index: number) => (
