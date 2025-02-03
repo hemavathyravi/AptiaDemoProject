@@ -1,22 +1,19 @@
-import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
-import '@/styles/globals.css'
-
-const inter = Inter({ subsets: ['latin'] })
-
-export const metadata: Metadata = {
-    title: 'Insurance Chatbot',
-    description: 'AI-powered insurance assistant',
-}
+// src/app/layout.tsx
+export const metadata = {
+    title: "My App",
+    description: "A simple Next.js app",
+};
 
 export default function RootLayout({
-                                       children,
-                                   }: {
-    children: React.ReactNode
+    children,
+}: {
+    children: React.ReactNode;
 }) {
     return (
         <html lang="en">
-        <body className={inter.className}>{children}</body>
+            <body className="min-h-screen bg-gray-100">
+                {children}
+            </body>
         </html>
-    )
+    );
 }
