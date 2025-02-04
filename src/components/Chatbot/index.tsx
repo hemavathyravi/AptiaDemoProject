@@ -70,14 +70,10 @@ export default function Chatbot() {
 
         try {
             const response = await fetch('/api/chatbot', {
-                method: 'POST',
+                method: 'GET',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({
-                    message: userInput,
-                    userId: userId
-                }),
             });
 
             console.log('Response status:', response.status);
