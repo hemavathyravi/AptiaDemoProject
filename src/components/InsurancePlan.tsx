@@ -10,7 +10,7 @@ interface CoverageCost {
 interface InsurancePlanProps {
     planName: string;
     premium?: string;
-    coverageDetails: CoverageCost[];
+    coverageDetails?: CoverageCost[];
 }
 
 const InsurancePlan: React.FC<InsurancePlanProps> = ({
@@ -28,7 +28,7 @@ const InsurancePlan: React.FC<InsurancePlanProps> = ({
                                                          ],
                                                      }) => {
     return (
-        <Card className="w-full max-w-md">
+        <Card className="">
             <CardHeader>
                 <CardTitle className="text-2xl font-bold text-primary">{planName}</CardTitle>
                 <CardDescription>

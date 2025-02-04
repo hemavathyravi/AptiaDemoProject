@@ -1,4 +1,5 @@
-// src/app/layout.tsx
+// src/app/layout.tsx\
+import "@/styles/globals.css"
 export const metadata = {
     title: "My App",
     description: "A simple Next.js app",
